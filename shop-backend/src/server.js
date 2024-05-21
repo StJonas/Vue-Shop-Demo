@@ -1,47 +1,84 @@
 import express from 'express'
-import { cartItems as CartItemsRaw, products as ProductsRaw } from './temp-data'
+import { MongoClient } from 'mongodb'
 
-let cartItems = CartItemsRaw;
-let products = ProductsRaw;
+require('dotenv').config();
+const client = new MongoClient(process.env.DB_URL);
+let db = null;
 
 const app = express();
 app.use(express.json());
 
-function populatedCartIds(ids) {
-    return ids.map(id => products.find(product => product.id === id));
+async function connectToDatabase() {
+    if (!db) {
+        try {
+            await client.connect();
+            db = client.db('VUE-SHOP-DEMO');
+            console.log('Connected to MongoDB');
+        } catch (error) {
+            console.error('Error connecting to MongoDB:', error);
+            throw error;
+        }
+    }
+}
+
+app.use(async (req, res, next) => {
+    try {
+        await connectToDatabase();
+        next();
+    } catch (error) {
+        res.status(500).send('Failed to connect to the database');
+    }
+});
+
+async function populatedCartIds(ids) {
+    return Promise.all(ids.map(id => db.collection('products').findOne({ id })))
 }
 
 app.get('/hello', (req, res) => {
     res.send('hello!');
 })
 
-app.get('/products', (req, res) => {
+app.get('/products', async (req, res) => {
+    const products = await db.collection('products').find({}).toArray();
     res.json(products);
 })
 
-app.get('/cart', (req, res) => {
-    const populatedCart = populatedCartIds(cartItems);
+app.get('/users/:userId/cart', async (req, res) => {
+    const user = await db.collection('users').findOne({ id: req.params.userId });
+    const populatedCart = await populatedCartIds(user.cartItems);
     res.json(populatedCart);
 })
 
-app.post('/cart', (req, res) => {
+app.post('/users/:userId/cart', async (req, res) => {
+    const userId = req.params.userId;
     const productId = req.body.id;
-    cartItems.push(productId);
-    const populatedCart = populatedCartIds(cartItems);
+
+    await db.collection('users').updateOne({ id: userId }, {
+        $addToSet: { cartItems: productId }
+    })
+
+    const user = await db.collection('users').findOne({ id: req.params.userId });
+    const populatedCart = await populatedCartIds(user.cartItems);
     res.json(populatedCart);
 })
 
-app.delete('/cart/:productId', (req, res) => {
+app.delete('user/:userId/cart/:productId', async (req, res) => {
+    const userId = req.params.userId;
     const productId = req.body.productId;
-    cartItems = cartItems.filter(id => id != productId);
-    res.json(cartItems);
+
+    await db.collection('users').updateOne({ id: userId }, {
+        $pull: { cartItems: productId }
+    })
+
+    const user = await db.collection('users').findOne({ id: req.params.userId });
+    const populatedCart = await populatedCartIds(user.cartItems);
+    res.json(populatedCart);
 })
 
-app.get('/products/:productId', (req, res) => {
+app.get('/products/:productId', async (req, res) => {
     const productId = req.params.productId;
-    const product = products.find(product => productId === product.id);
-    const populatedCart = populatedCartIds(cartItems);
-    res.json(populatedCart);
+    const product = await db.collection('product').findOne({ id: productId })
+    res.json(product);
 })
 
 app.listen(8000, () => {
